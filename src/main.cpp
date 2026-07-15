@@ -9,6 +9,8 @@
 #include <queue>
 #include <stdexcept>
 #include <chrono>
+#include <pthread.h>
+#include <bits/stdc++.h>
 
 //Create a Chunk Queue class
 //Should have Push, Pop, and Finish (To notify child thread)
@@ -35,34 +37,32 @@ class ChunkQueue {
         bool pop(std::string &out) {
             std::unique_lock<std::mutex> lock{mutex};
             cond_var.wait(lock, [this] { return !queue.empty() || is_finished; });
-            {
-                std::lock_guard<std::mutex> lock{mutex};
-                if (is_finished) {
-                    if(!queue.empty()) {
-                        for(int i = 0; i < queue.size(); i++) {
-                            out.append(queue.at(i));
-                        }
-                    }
-                    
-                    return true;
-                }
-
-                if (!queue.empty()) {
-                    for(int i = 0; i < queue.size(); i++) {
+            if (is_finished) {
+                if(!queue.empty()) {
+                    for(size_t i = 0; i < queue.size(); i++) {
                         out.append(queue.at(i));
                     }
                 }
-
-                return false;
+                
+                return true;
             }
-            cond_var.notify_all();
+
+            if (!queue.empty()) {
+                size_t queueSize = queue.size();
+                for(size_t i = 0; i < queueSize; i++) {
+                    out.append(queue.at(i));
+                }
+                queue.erase(queue.begin(), queue.begin() + queueSize);
+                queue.shrink_to_fit();
+            }
+
+            return false;
         }
 
         void finished() {
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 is_finished = true;
-                std::cout << "File contents read" << std::endl;
             }
             cond_var.notify_all();
         }
@@ -79,31 +79,56 @@ std::condition_variable cv;
 bool complete = false;
 
 void Tokenize(ChunkQueue &queue, std::vector<std::string> &tokens) {
-    std::cout << "Starting Tokenizes" << std::endl;
-    std::string container;
-    while(!queue.pop(container)) {
-        for (char c : container) {
-            if (c != ' ' && c != '\n') {
-                container += c;
-            } else if (c == ' ') {
-                tokens.push_back(std::move(container));
-            } else if (c == '\n') {
-                tokens.push_back(std::move(container));
-                tokens.push_back("NEWLINE");
+    pthread_setname_np(pthread_self(), "Tokenizer");
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        std::string container;
+        while (true) {
+            std::string buffer;          // fresh each time
+            bool done = queue.pop(buffer);
+            // Basic for now, when proof of concept it complete
+            // This will be changed to something more akin to what real complilers use
+            for (char c : buffer) {
+                switch (c) {
+                    case ' ':
+                        if(!container.empty()) {
+                            tokens.push_back(std::move(container));
+                        }
+                        break;
+                    case '\n':
+                        if(!container.empty()) {
+                            tokens.push_back(std::move(container));
+                        }
+                        tokens.push_back("NEWLINE");
+                        break;
+                    case '\t':
+                        if(!container.empty()) {
+                            tokens.push_back(std::move(container));
+                        }
+                        tokens.push_back("TAB");
+                        break;
+                    default:
+                        container += c;
+                        break;
+                }
             }
+            if (done) break;
         }
+        complete = true;
     }
-    complete = true;
+    cv.notify_one();
 }
 
 void FileRead(ChunkQueue &queue, std::vector<std::string> &chunks) {
+    pthread_setname_np(pthread_self(), "FileReader");
     for (std::string str : chunks) {
         queue.push(str);
     }
     queue.finished();
 }
 
-int main(int argc, char* argv[]) {
+int main(/*int argc, char* argv[]*/) {
+    pthread_setname_np(pthread_self(), "Main");
 
     // if (argc != 2) {
     //     throw std::runtime_error("Invalid number of arguments");
@@ -158,17 +183,18 @@ int main(int argc, char* argv[]) {
 
     std::vector<std::string> tokens;
 
-    std::thread tokenizatizer(Tokenize, std::ref(chunkQueue), std::ref(tokens));
+    std::thread tokenizer(Tokenize, std::ref(chunkQueue), std::ref(tokens));
     std::thread fileReader(FileRead, std::ref(chunkQueue), std::ref(chunks));
-    tokenizatizer.join();
+
+    tokenizer.join();
     fileReader.join();
 
     std::unique_lock<std::mutex> lock(mtx);
     cv.wait(lock, []{ return complete; });
 
-    std::cout << "Tokens found = " << tokens.size() << std::endl;
-    for(std::string str : tokens) {
+    for(std::string str : tokens) 
         std::cout << str << std::endl;
-    }
+    std::cout << "Tokens Found: " << tokens.size() << std::endl;
+
     return 0;
 }

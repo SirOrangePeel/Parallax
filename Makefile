@@ -10,4 +10,5 @@ test: parallax
 	./parallax
 
 clean:
+	rm -rf src/build/
 	rm -f parallax
