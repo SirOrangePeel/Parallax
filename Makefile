@@ -1,14 +1,25 @@
-CFLAGS = -std=c++17 -O2 -Werror -pthread -Wmultichar
+CFLAGS = -std=c++20 -O2 -Werror -pthread -Wmultichar
+BUILDFOLDER = src/build
 
-parallax: src/main.cpp
-	g++ $(CFLAGS) -o parallax src/main.cpp
+.PHONY: all test clean
 
+all: parallax
 
-.PHONY: test clean
+$(BUILDFOLDER):
+	mkdir -p $(BUILDFOLDER)
+
+parallax: src/main.cpp | $(BUILDFOLDER)
+	g++ $(CFLAGS) -o $(BUILDFOLDER)/parallax src/main.cpp
+
+output: $(BUILDFOLDER)/out.asm | $(BUILDFOLDER)
+	nasm -felf64 -g -Fdwarf $(BUILDFOLDER)/out.asm -o $(BUILDFOLDER)/out.o
+	ld $(BUILDFOLDER)/out.o -o out
 
 test: parallax
-	./parallax
+	./$(BUILDFOLDER)/parallax languageFile.px
 
 clean:
-	rm -rf src/build/
-	rm -f parallax
+	rm -rf $(BUILDFOLDER)
+	rm -f parallax out
+
+	
